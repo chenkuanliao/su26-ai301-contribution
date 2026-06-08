@@ -1,70 +1,96 @@
 # su26-ai301-contribution
-# Contribution [#]: [Issue Title]
+# Contribution 1: `metrics` does not work well with `vmap`
 
-**Contribution Number:** [1 / 2 / 3]  
-**Student:** [Your Name]  
-**Issue:** [GitHub issue link]  
-**Status:** [Phase I / Phase II / Phase III / Phase IV] [In Progress / Complete]
+## Phase I: Issue Selection
+
+**Contribution Number:** 1  
+**Student:** Chen-Kuan (Brian) Liao  
+**Issue:** https://github.com/google/flax/issues/5483  
+**Issue Title:** `metrics` does not work well with `vmap`  
+**Project:** google/flax  
+**Status:** Phase I Complete
+
+---
+
+## Problem Summary
+
+This Flax issue reports that `flax.nnx.metrics.Average` does not behave correctly when used with `nnx.vmap`. The issue author's workflow initializes multiple models in parallel, one per seed, and returns a separate optimizer and `nnx.MultiMetric` for each model. Before calling `metrics.reset()`, the metric state is correctly batched: fields such as `count` and `total` have shape `(3,)`, matching the three vmapped models.
+
+After calling `metrics.reset()`, those same metric states become scalar arrays instead of keeping their vmapped shape. For example, `count` changes from an array with shape `(3,)` to a scalar `Array(0, dtype=int32)`, and `total` changes from shape `(3,)` to scalar `Array(0., dtype=float32)`. This shape change later causes a `vmap` error because the transformed code expects an axis-0 dimension, but the reset metric state no longer has one.
+
+In short, the metric object appears to be valid immediately after vmapped initialization, but `reset()` loses the batched state shape. The issue is likely related to how Flax NNX metric state is reset inside `flax/nnx/training/metrics.py`.
 
 ---
 
 ## Why I Chose This Issue
 
-[1-2 paragraphs explaining why this issue interests you, how it matches your skills/learning goals, what you hope to learn]
+I chose this issue because it connects directly to my interests in ML systems, especially framework behavior around JAX transformations and state management. The bug involves the interaction between `vmap`, mutable NNX state, and user-facing training utilities, which is the kind of systems-level framework issue I want to understand better.
+
+This is also a good fit for my background as a CS PhD student working on ML systems such as JAX and PyTorch. I am interested in how deep learning frameworks preserve shape, dtype, and state semantics across transformations like `vmap`, `jit`, and gradient-based training loops. This issue is small enough to be approachable for a first open-source contribution, but it still requires understanding real framework internals instead of only making a documentation or formatting change.
 
 ---
 
-## Understanding the Issue
+## Phase I Notes
 
-### Problem Description
+For Phase I, I am only documenting the issue link, a problem summary, and why I chose this issue. I have not started the reproduction process, solution design, testing strategy, implementation, pull request, or maintainer feedback log yet.
 
-[In your own words, what's broken or missing?]
+Those will be handled in later phases:
 
-### Expected Behavior
+- **Phase II:** understanding the issue, reproduction process, and solution approach
+- **Phase III:** testing strategy and implementation notes
+- **Phase IV:** pull request link, summary, and maintainer feedback log
+
+---
+
+## Phase II: Understanding, Reproduction, and Solution Approach
+
+### Understanding the Issue
+
+#### Problem Description
+
+[In your own words, what is broken or missing?]
+
+#### Expected Behavior
 
 [What should happen?]
 
-### Current Behavior
+#### Current Behavior
 
 [What actually happens?]
 
-### Affected Components
+#### Affected Components
 
 [Which parts of the codebase are involved?]
 
----
+### Reproduction Process
 
-## Reproduction Process
+#### Environment Setup
 
-### Environment Setup
+[Notes on setting up your local development environment, including challenges you faced and how you solved them]
 
-[Notes on setting up your local development environment - challenges you faced, how you solved them]
-
-### Steps to Reproduce
+#### Steps to Reproduce
 
 1. [Step 1]
 2. [Step 2]
 3. [Observed result]
 
-### Reproduction Evidence
+#### Reproduction Evidence
 
 - **Commit showing reproduction:** [Link to commit in your fork]
 - **Screenshots/logs:** [If applicable]
 - **My findings:** [What you discovered during reproduction]
 
----
+### Solution Approach
 
-## Solution Approach
+#### Analysis
 
-### Analysis
+[Your analysis of the root cause: what is causing the issue?]
 
-[Your analysis of the root cause - what's causing the issue?]
-
-### Proposed Solution
+#### Proposed Solution
 
 [High-level description of your fix approach]
 
-### Implementation Plan
+#### Implementation Plan
 
 Using UMPIRE framework (adapted):
 
@@ -85,36 +111,36 @@ Using UMPIRE framework (adapted):
 
 ---
 
-## Testing Strategy
+## Phase III: Testing Strategy and Implementation Notes
 
-### Unit Tests
+### Testing Strategy
+
+#### Unit Tests
 
 - [ ] Test case 1: [Description]
 - [ ] Test case 2: [Description]
 - [ ] Test case 3: [Description]
 
-### Integration Tests
+#### Integration Tests
 
 - [ ] Integration scenario 1
 - [ ] Integration scenario 2
 
-### Manual Testing
+#### Manual Testing
 
 [What you tested manually and results]
 
----
+### Implementation Notes
 
-## Implementation Notes
-
-### Week [X] Progress
+#### Week [X] Progress
 
 [What you built this week, challenges faced, decisions made]
 
-### Week [Y] Progress
+#### Week [Y] Progress
 
 [Continue documenting as you work]
 
-### Code Changes
+#### Code Changes
 
 - **Files modified:** [List]
 - **Key commits:** [Links to important commits]
@@ -122,7 +148,9 @@ Using UMPIRE framework (adapted):
 
 ---
 
-## Pull Request
+## Phase IV: Pull Request and Maintainer Feedback
+
+### Pull Request
 
 **PR Link:** [GitHub PR URL when submitted]
 
@@ -154,6 +182,5 @@ Using UMPIRE framework (adapted):
 
 ## Resources Used
 
-- [Link to helpful documentation]
-- [Tutorial or Stack Overflow post that helped]
-- [GitHub issues or discussions that helped]
+- GitHub issue: https://github.com/google/flax/issues/5483
+- Flax repository: https://github.com/google/flax
