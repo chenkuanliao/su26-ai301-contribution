@@ -258,15 +258,21 @@ Added to `tests/nnx/metrics_test.py`:
 
 ### Pull Request
 
-**PR Link:** [GitHub PR URL when submitted]
+**PR Link:** [#5491 — Make metric reset() shape-preserving under vmap](https://github.com/google/flax/pull/5491)
 
-**PR Description:** [Draft or final PR description - much of the content above can be adapted]
+**PR Description:**
+
+`Average.reset` and `Welford.reset` re-zeroed their state by assigning a scalar `jnp.array(0, ...)`. When a metric is built under `nnx.vmap` its state carries a leading batch axis, and on some `Variable` backends the scalar assignment replaced the whole array, collapsing shape `(N,)` to `()` and breaking a later `vmap` over the metric.
+
+This PR uses `jnp.zeros_like(self.x[...])` so the reset value already has the correct shape and dtype, preserving the batch axis on every backend. In the normal (non-vmap) case behavior is unchanged. Also keeps `Welford.count` as `int32` (matching `__init__`) instead of switching to `uint32`. Adds regression tests for the vmap reset flow.
+
+Fixes #5483
 
 **Maintainer Feedback:**
-- [Date]: [Summary of feedback received]
-- [Date]: [How you addressed it]
+- **2026-06-11 (@vfdev-5, via issue #5483):** Since `main` already works correctly, there is nothing to fix in `reset()` itself — they are open to keeping the tests only, in a slightly rewritten form. The `reset()` code change and CHANGELOG entry should be dropped.
+- **2026-06-11 (@chenkuanliao, follow-up):** Asked for clarification — confirmed plan to drop the `reset()` change and keep only regression tests; asked @vfdev-5 for preferred test structure (naming, parametrization, or folding into existing `test_multimetric`/`test_welford` cases) and whether to keep the `Welford` dtype assertion. Awaiting response before pushing the update.
 
-**Status:** [Awaiting review / Iterating / Approved / Merged]
+**Status:** Open — awaiting maintainer response on preferred test form before pushing the revised commit
 
 ---
 
