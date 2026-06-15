@@ -209,38 +209,48 @@ Using UMPIRE framework (adapted):
 
 ## Phase III: Testing Strategy and Implementation Notes
 
+### Scope Decision
+
+Because the original crash no longer reproduces on `main`, this contribution is framed as **hardening + regression coverage**, not a live-crash fix:
+
+1. Make `reset()` guarantee shape/dtype preservation itself instead of relying on `Variable` broadcast semantics (this also repairs the reporter's still-broken released version, flax 0.12.0).
+2. Add regression tests that lock in the vmap behavior so it cannot silently break again.
+
+Per maintainer feedback from @vfdev-5, the `reset()` code change was dropped since `main` already behaves correctly — the PR is scoped to tests only.
+
 ### Testing Strategy
 
 #### Unit Tests
 
-- [ ] Test case 1: [Description]
-- [ ] Test case 2: [Description]
-- [ ] Test case 3: [Description]
+Added to `tests/nnx/metrics_test.py`:
+
+- [x] **`test_vmap_reset_preserves_shape`:** construct a `MultiMetric(loss=Average(...))` under `nnx.vmap` (state shape `(3,)`), call `reset()`, and assert `total`/`count` keep shape `(3,)`, `count` stays `int32`, and `total` is all zeros. Then run a vmapped `update` and assert `compute()['loss'] == [0., 1., 2.]`.
+- [x] **`test_welford_reset_preserves_shape_and_dtype`:** construct `Welford()` under `nnx.vmap` (shape `(4,)`), call `reset()`, and assert `count`/`mean`/`m2` keep shape `(4,)` and `count` is `int32` (guards the `uint32` → `int32` consistency).
+- [x] **Existing suite regression:** all pre-existing metric tests (`test_average`, `test_multimetric`, `test_welford*`, `test_binary_classification_accuracy`, etc.) must still pass unchanged, confirming non-vmap behavior (incl. `reset()` → `nan` via `0/0`) is preserved.
 
 #### Integration Tests
 
-- [ ] Integration scenario 1
-- [ ] Integration scenario 2
+- [x] **Full vmap lifecycle:** construct-in-vmap → `reset()` outside vmap → vmapped `update` → `compute()`, end to end via a standalone repro script. Passes on patched `main`.
+- [x] **Backend independence:** verified the proposed `reset()` logic preserves shape on the reporter's *broken* stack (flax 0.12.0 + jax 0.7.2) via a monkeypatch, confirming the fix does not depend on newer `Variable`/jax internals.
 
 #### Manual Testing
 
-[What you tested manually and results]
+- Ran `python -m pytest tests/nnx/metrics_test.py -q` in the clean `flax5483` env (flax 0.12.7 editable + jax 0.10.1): **17 passed** (15 existing + 2 new).
+- Re-ran the Phase II repro script against the patched tree: post-`reset()` shape stays `(3,)` and the vmapped update succeeds (`{'loss': [0., 1., 2.]}`).
+- Monkeypatch check on flax 0.12.0 + jax 0.7.2: `before reset (3,)` → `after reset (3,) ← preserved` (without the fix this collapses to `()`).
 
-### Implementation Notes
+### Code Changes
 
-#### Week [X] Progress
+- **Files modified:**
+  - `tests/nnx/metrics_test.py` — added `test_vmap_reset_preserves_shape` and `test_welford_reset_preserves_shape_and_dtype`.
+  - `flax/nnx/training/metrics.py` — `zeros_like` fix drafted locally but dropped per maintainer preference.
 
-[What you built this week, challenges faced, decisions made]
+- **Key commits:** [`db1487c`](https://github.com/chenkuanliao/flax/commit/db1487c014294e08c4d299ce21adbefe3d39bec0) — "Make metric reset() shape-preserving under vmap (#5483)" (branch `fix-issue-5483`, 2026-06-11)
 
-#### Week [Y] Progress
-
-[Continue documenting as you work]
-
-#### Code Changes
-
-- **Files modified:** [List]
-- **Key commits:** [Links to important commits]
-- **Approach decisions:** [Why you chose certain approaches]
+- **Approach decisions:**
+  - Chose `jnp.zeros_like(self.x[...])` over a shape-aware `jnp.zeros(self.x.shape, self.x.dtype)` because it is shorter, idiomatic in Flax, and copies dtype automatically — though this change is now out of scope for the PR.
+  - Kept the test changes inside `metrics_test.py` rather than creating a new file, to match the project's convention of colocating tests with the module under test.
+  - The `Welford` dtype assertion (`count` stays `int32`) is included in the tests to guard against a latent inconsistency, even though the `reset()` code change was dropped.
 
 ---
 
