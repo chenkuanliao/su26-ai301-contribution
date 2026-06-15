@@ -48,66 +48,162 @@ Those will be handled in later phases:
 
 #### Problem Description
 
-[In your own words, what is broken or missing?]
+`nnx.metrics.Average` — and everything built on top of it (`Accuracy`, and any `Average`/`Welford` wrapped inside a `MultiMetric`) — does not survive a `reset()` when the metric was constructed inside an `nnx.vmap`'d function.
+
+A common pattern is initializing *N* models in parallel (one per random seed) by `vmap`-ing the constructor. Each metric's internal state (`Average.total`, `Average.count`) then carries a leading batch dimension of shape `(N,)`, matching the *N* models. Calling `metrics.reset()` is supposed to just re-zero that state. Instead, on the reporter's versions, `reset()` throws away the batch dimension and replaces the state with a **scalar** of shape `()`. The metric is now silently incompatible with the *N* models, and the next `vmap` over it crashes.
+
+The underlying cause is *not* in the metric arithmetic — it is that `reset()` assigns a fresh scalar zero (`jnp.array(0)`) and depends on the `Variable` layer to broadcast that scalar back into the existing `(N,)` shape. On older `Variable`/jax backends that assignment **replaces the whole array** instead of broadcasting, collapsing the shape.
 
 #### Expected Behavior
 
-[What should happen?]
+After `metrics.reset()`, each metric state should keep its shape and dtype and simply be re-zeroed. If `total`/`count` were shape `(N,)` before reset, they should still be shape `(N,)` (filled with zeros) afterward, so the metrics remain usable with the *N* vmapped models/optimizers.
 
 #### Current Behavior
 
-[What actually happens?]
+On the reporter's versions (flax `0.12.0`, jax `0.7.2`):
+
+- Before reset: `total.shape == (3,)`, `count.shape == (3,)`.
+- After `reset()`: `total.shape == ()`, `count.shape == ()` — the batch dimension is gone.
+- A subsequent `nnx.vmap`'d `metrics.update(...)` raises:
+
+  ```
+  ValueError: vmap was requested to map its argument along axis 0, which implies
+  that its rank should be at least 1, but is only 0 (its shape is ())
+  ```
+
+**Important:** the crash no longer reproduces on current `main` (flax 0.12.7 / jax 0.10.1), because the `Variable` assignment layer was updated to broadcast scalars into existing arrays. However, `reset()` only works on `main` by relying on that implementation detail rather than guaranteeing shape preservation itself — and the released 0.12.0 remains broken.
 
 #### Affected Components
 
-[Which parts of the codebase are involved?]
+- `flax/nnx/training/metrics.py`
+  - `Average.reset` (`metrics.py:97`) — assigns scalar zeros.
+  - `Welford.reset` (`metrics.py:181`) — same pattern; also resets `count` as `uint32` while it is created as `int32`.
+  - `Accuracy` and `MultiMetric` inherit/delegate to these `reset` methods, so they are affected too.
+- Root cause interaction lives in the `Variable` state layer:
+  - `Variable.set_value` / `__setitem__` (`flax/nnx/variablelib.py`) — decides whether a full-index assignment broadcasts into the existing array or replaces it wholesale.
 
 ### Reproduction Process
 
 #### Environment Setup
 
-[Notes on setting up your local development environment, including challenges you faced and how you solved them]
+I set up a clean, isolated environment so the reproduction would not be polluted by any system packages.
+
+- The machine had no `conda`, so I installed Miniconda via Homebrew: `brew install --cask miniconda`.
+- **Challenge — Anaconda Terms of Service:** `conda create` refused to run because the default Anaconda channels' ToS had not been accepted. **Solution:** I created environments against conda-forge only with `-c conda-forge --override-channels`, which avoids the gated channels entirely.
+- I created **two** clean environments to get a clear before/after comparison:
+  - `flax5483` — editable install of this repo (`pip install -e .`): **flax 0.12.7 (current `main`) + jax 0.10.1**.
+  - `flax5483_old` — the reporter's exact versions: **flax 0.12.0 + jax 0.7.2** (pinned, because flax 0.12.0 is incompatible with newer jax — it fails importing `mutable_array` from `jax._src.core`).
+- **Challenge — local package shadowing:** running the reproduction script from the repo root made the `flax5483_old` env import the repo's local `flax/` directory (it is on `sys.path[0]`) instead of the pip-installed 0.12.0. **Solution:** I ran the reproduction script from `/tmp` so the installed package is imported, and verified with `flax.__file__` each time.
 
 #### Steps to Reproduce
 
-1. [Step 1]
-2. [Step 2]
-3. [Observed result]
+1. `nnx.vmap` a function that **constructs and returns** a `nnx.MultiMetric(loss=nnx.metrics.Average("loss"))`. This batches the metric state to shape `(3,)`.
+2. Call `metrics.reset()` **outside** the vmap.
+3. Run an `nnx.vmap`'d `metrics.update(loss=...)`.
+4. **Observed result (flax 0.12.0 / jax 0.7.2):** after step 2 the state shape collapses `(3,)` → `()`, and step 3 raises the `vmap ... rank should be at least 1` `ValueError` from the issue.
+
+Reproduction script used:
+
+```python
+import jax, jax.numpy as jnp
+import flax, flax.nnx as nnx
+
+print("flax", flax.__version__, "jax", jax.__version__)
+
+# construct metrics inside vmap, return them (state becomes shape (3,))
+@nnx.vmap(in_axes=0, out_axes=0)
+def init_metrics(seed):
+    return nnx.MultiMetric(loss=nnx.metrics.Average("loss"))
+
+metrics = init_metrics(jnp.arange(3))
+print("before reset:", metrics.loss.total.value.shape)   # (3,)
+
+metrics.reset()
+print("after reset: ", metrics.loss.total.value.shape)    # 0.12.0 -> ()  | main -> (3,)
+
+@nnx.vmap(in_axes=(0, 0), out_axes=None)
+def do_update(m, value):
+    m.update(loss=value)
+
+do_update(metrics, jnp.arange(3, dtype=jnp.float32))       # 0.12.0 -> ValueError
+print("compute:", metrics.compute())
+```
 
 #### Reproduction Evidence
 
-- **Commit showing reproduction:** [Link to commit in your fork]
-- **Screenshots/logs:** [If applicable]
-- **My findings:** [What you discovered during reproduction]
+- **Commit showing reproduction:** _(script above; to be pushed to fork as `repro/issue_5483.py`)_
+- **Screenshots/logs:** observed output
+
+  | Stage | flax 0.12.0 / jax 0.7.2 (reporter) | flax 0.12.7 `main` / jax 0.10.1 |
+  |---|---|---|
+  | shape before reset | `(3,)` | `(3,)` |
+  | shape **after reset** | **`()` — bug** | `(3,)` ✅ |
+  | vmapped update after reset | **`ValueError` (exact issue error)** | works, `compute() -> [0., 1., 2.]` ✅ |
+
+- **My findings:**
+  - The bug reproduces exactly on the reporter's versions and **does not** reproduce on current `main`.
+  - It is **not** fixed by one targeted commit. I initially suspected `b5db513f` (it was the last commit to touch the relevant line), but testing the commit *immediately before* it showed the bug was already gone. The real reason `main` works is the evolution of the `Variable` state layer: a full-index assignment now broadcasts a scalar into the existing array (via a mutable-array ref `raw_value[...] = value`, or via `raw_value.at[...].set(value)`), instead of replacing the whole array with `object.__setattr__('raw_value', value)` as flax 0.12.0 did.
+  - **Key insight:** `reset()` only works today *by accident* — it depends on `Variable` broadcast semantics rather than stating its own intent. It is still broken on the reporter's released version.
 
 ### Solution Approach
 
 #### Analysis
 
-[Your analysis of the root cause: what is causing the issue?]
+`Average.reset()` does:
+
+```python
+self.total[...] = jnp.array(0, dtype=jnp.float32)
+self.count[...] = jnp.array(0, dtype=jnp.int32)
+```
+
+The right-hand side is a **scalar** (shape `()`). Whether the metric keeps its `(N,)` shape depends entirely on how the underlying `Variable` handles `var[...] = scalar`:
+
+- On flax 0.12.0 the non-ref path ran `object.__setattr__(self, 'raw_value', value)` — it **replaced** the `(N,)` array with the scalar, collapsing the shape.
+- On newer backends the assignment broadcasts in place (`raw_value[...] = value`) or via `raw_value.at[...].set(value)`, so the shape is preserved.
+
+So the root cause is that `reset()` delegates shape preservation to `Variable` internals instead of guaranteeing it.
 
 #### Proposed Solution
 
-[High-level description of your fix approach]
+Make `reset()` shape-preserving on its own, independent of any `Variable`/jax backend, by zeroing with a value that already has the correct shape and dtype:
+
+```python
+self.total[...] = jnp.zeros_like(self.total[...])
+self.count[...] = jnp.zeros_like(self.count[...])
+```
+
+Because `jnp.zeros_like(self.total[...])` already has shape `(N,)`, even the old "replace the whole array" path keeps the shape — so this also **fixes the still-broken released version**, not just `main`. The same change applies to `Welford.reset` (`count`, `mean`, `m2`), which additionally fixes a latent dtype inconsistency (`count` is created as `int32` but reset as `uint32`).
+
+Then add a regression test so this cannot silently break again.
+
+**Maintainer feedback (from @vfdev-5 on the issue):** Since `main` already works correctly, the maintainer indicated they prefer to only keep the tests in a slightly rewritten form, rather than applying the `zeros_like` change to `reset()` itself. The PR will be scoped accordingly — dropping the `reset()` code change and CHANGELOG entry, keeping only the regression tests for the vmap + reset flow.
+
+**PR:** [#5491 — Make metric reset() shape-preserving under vmap](https://github.com/google/flax/pull/5491)
 
 #### Implementation Plan
 
 Using UMPIRE framework (adapted):
 
-**Understand:** [Restate the problem]
+**Understand:** When a metric is constructed under `nnx.vmap`, its state is batched to shape `(N,)`. `reset()` must re-zero the state *without* dropping that batch dimension; on flax 0.12.0 it could collapse the state to a scalar, breaking later `vmap` calls. On current `main` this is no longer a live crash, but there is no regression test guarding the behavior.
 
-**Match:** [What similar patterns/solutions exist in the codebase?]
+**Match:** `Welford.reset` and `Accuracy` reuse the same scalar-assignment pattern, so any fix generalizes across the file. `jnp.zeros_like(...)` is already idiomatic in JAX/Flax for "same shape and dtype, zeroed," which is exactly the reset semantics. The maintainer's preferred scope is test-only, so the match is the existing `test_multimetric` / `test_welford` test structure in `tests/nnx/metrics_test.py`.
 
-**Plan:** [Step-by-step implementation plan]
-1. [Modify file X to do Y]
-2. [Add function Z]
-3. [Update tests]
+**Plan:**
+1. ~~Modify `Average.reset` in `flax/nnx/training/metrics.py`~~ (dropped per maintainer preference — `main` already works)
+2. ~~Modify `Welford.reset` similarly~~ (same reason)
+3. Add regression tests in `tests/nnx/metrics_test.py` covering the vmap-construct → reset → vmap-update flow for `Average`/`MultiMetric` and `Welford`, asserting shape is preserved and a subsequent vmapped update works correctly.
 
-**Implement:** [Link to your branch/commits as you work]
+**Implement:** Branch `fix-issue-5483` — PR [#5491](https://github.com/google/flax/pull/5491)
 
-**Review:** [Self-review checklist - does it follow the project's contribution guidelines?]
+**Review checklist:**
+- [ ] Scalar (non-vmap) behavior unchanged — `reset()` followed by `compute()` still yields `nan` via `0/0`.
+- [ ] No public API change.
+- [ ] Matches surrounding test style and conventions in `metrics_test.py`.
+- [ ] Follows Flax `CONTRIBUTING.md` (CLA, tests, formatting, pre-commit hooks).
 
-**Evaluate:** [How will you verify it works?]
+**Evaluate:**
+- Run `pytest tests/nnx/metrics_test.py` in the clean `flax5483` env.
+- Re-run the reproduction script and confirm the post-reset shape stays `(3,)` and the vmapped update succeeds.
 
 ---
 
