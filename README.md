@@ -19,7 +19,7 @@ Each contribution is tracked in its own Markdown file, organized into four phase
 | # | Issue | Title | Status |
 |---|-------|-------|--------|
 | 1 | [#5483](https://github.com/google/flax/issues/5483) | `metrics` does not work well with `vmap` | PR [#5491](https://github.com/google/flax/pull/5491) open — scoped to regression tests per maintainer feedback |
-| 2 | [#5512](https://github.com/google/flax/issues/5512) | `flax.nnx.cond` causes tracing cache misses | Phase II complete — branch `fix-issue-5512` created, repro confirmed on `main` |
+| 2 | [#5512](https://github.com/google/flax/issues/5512) | `flax.nnx.cond` causes tracing cache misses | PR [#5518](https://github.com/google/flax/pull/5518) open — fix + regression tests submitted |
 
 ### [Contribution 1 — `metrics` does not work well with `vmap`](issue-1-5483.md)
 
