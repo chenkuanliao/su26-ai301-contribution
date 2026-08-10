@@ -18,12 +18,12 @@ Each contribution is tracked in its own Markdown file, organized into four phase
 
 | # | Issue | Title | Status |
 |---|-------|-------|--------|
-| 1 | [#5483](https://github.com/google/flax/issues/5483) | `metrics` does not work well with `vmap` | PR [#5491](https://github.com/google/flax/pull/5491) open — regression test only; **approved by @samanklesaria**, awaiting extra reviewer sign-off |
+| 1 | [#5483](https://github.com/google/flax/issues/5483) | `metrics` does not work well with `vmap` | PR [#5491](https://github.com/google/flax/pull/5491) **merged July 21, 2026** — regression test added |
 | 2 | [#5512](https://github.com/google/flax/issues/5512) | `flax.nnx.cond` causes tracing cache misses | PR [#5518](https://github.com/google/flax/pull/5518) open — fix + regression tests, expanded to all four control-flow ops; **approved by @samanklesaria** |
 
 ### [Contribution 1 — `metrics` does not work well with `vmap`](issue-1-5483.md)
 
-`nnx.metrics.Average` (and metrics built on it) could lose their batched state shape on `reset()` when constructed under `nnx.vmap`, collapsing shape `(N,)` to a scalar `()` and breaking later vmapped updates. The crash reproduces on the reporter's released versions (flax 0.12.0 / jax 0.7.2) but not on current `main`, so the contribution is scoped to a **regression test only** that locks in the current vmap `reset()` behavior. Full writeup: [issue-1-5483.md](issue-1-5483.md).
+`nnx.metrics.Average` (and metrics built on it) could lose their batched state shape on `reset()` when constructed under `nnx.vmap`, collapsing shape `(N,)` to a scalar `()` and breaking later vmapped updates. The crash reproduces on the reporter's released versions (flax 0.12.0 / jax 0.7.2) but not on current `main`. The merged contribution adds a focused regression test that locks in the current shape-preserving behavior. Full writeup: [issue-1-5483.md](issue-1-5483.md).
 
 ### [Contribution 2 — `flax.nnx.cond` causes tracing cache misses](issue-2-5512.md)
 
